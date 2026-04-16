@@ -6,7 +6,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // リストを取得する対象のページ
-  const apiUrl = "/genlip/pages/528.html"; 
+  const apiUrl = "/genlip/pages/14.html"; 
   console.log(`【デバッグ1】リスト取得開始: ${apiUrl}`);
 
   try {
