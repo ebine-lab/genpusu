@@ -1,23 +1,31 @@
 document.addEventListener("DOMContentLoaded", async () => {
   const container = document.querySelector('#custom-random-container');
-  if (!container) {
-    console.error("【デバッグ】表示先コンテナ（#custom-random-container）が現在のページに存在しません。");
+  if (!container) return;
+
+  // 1. 現在の30分エリアを示すユニークIDを計算
+  // 例: 10:00〜10:29はずっと同じID、10:30になると+1される
+  const timeWindowId = Math.floor(Date.now() / (30 * 60 * 1000));
+
+  // 2. ブラウザのキャッシュを確認
+  const cachedWindowId = localStorage.getItem('atwiki_random_window');
+  const cachedHtml = localStorage.getItem('atwiki_random_html');
+
+  // キャッシュのIDが現在の30分エリアと一致していれば、それを表示して即終了（通信なし）
+  if (cachedWindowId == timeWindowId && cachedHtml) {
+    container.innerHTML = cachedHtml;
     return;
   }
 
-  // リストを取得する対象のページ
+  // --- ここから下は、30分に1回だけ実行される重い処理 ---
   const apiUrl = "/genlip/pages/14.html"; 
-  console.log(`【デバッグ1】リスト取得開始: ${apiUrl}`);
 
   try {
     const resA = await fetch(apiUrl);
-    if (!resA.ok) console.error(`【デバッグ】ページのfetchに失敗しました。HTTPステータス: ${resA.status}`);
-    
     const docA = new DOMParser().parseFromString(await resA.text(), "text/html");
     
     const randomCardAnchor = docA.querySelector('#randomcard');
     if (!randomCardAnchor) {
-      console.warn("【デバッグ2】取得したページ内に id=\"randomcard\" が見つかりませんでした。");
+      container.innerHTML = ""; 
       return;
     }
 
@@ -27,44 +35,58 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (randomLinkA) {
       const pageIdListRaw = JSON.parse(randomLinkA.getAttribute('data-pageid_list'));
       const wikiId = randomLinkA.getAttribute('data-wikiid');
-      console.log(`【デバッグ3】取得した配列データ（総数: ${pageIdListRaw.length}）:`, pageIdListRaw);
       
       const pageIdList = pageIdListRaw.filter(id => id !== 310 && id !== "310");
-      
-      if (pageIdList.length === 0) {
-        console.warn("【デバッグ】リストが空です。");
-        return;
-      }
+      if (pageIdList.length === 0) return;
 
-      // ランダムに選出
-      const cardpagenum = pageIdList[Math.floor(Math.random() * pageIdList.length)];
+      // 3. シード値（timeWindowId）から疑似乱数を生成する関数
+      const getSeededRandom = (seed) => {
+        let t = seed + 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+
+      // 4. 全ユーザー共通のランダムインデックスを決定
+      const randomIndex = Math.floor(getSeededRandom(timeWindowId) * pageIdList.length);
+      const cardpagenum = pageIdList[randomIndex];
       const targetUrl = `/${wikiId}/pages/${cardpagenum}.html`;
-      console.log(`【デバッグ4】抽選完了！ターゲットURL: ${targetUrl}`);
 
-      // ターゲットページを取得
+      // 5. ターゲットページをfetch
       const resTarget = await fetch(targetUrl);
       const docTarget = new DOMParser().parseFromString(await resTarget.text(), "text/html");
-      
-      // blockquoteを探す
       const blockquoteEl = docTarget.querySelector('blockquote'); 
 
       if (blockquoteEl) {
-        console.log("【デバッグ5-成功】blockquoteの抽出に成功しました！", blockquoteEl);
+        // 6. 画像にターゲットURLへのリンクを注入する
+        const imgEl = blockquoteEl.querySelector('img');
+        if (imgEl) {
+          const parentA = imgEl.closest('a');
+          if (parentA) {
+            // 既にリンク付き画像だった場合はhrefを書き換え
+            parentA.setAttribute('href', targetUrl);
+          } else {
+            // リンクがない画像の場合はaタグで包む
+            const aTag = document.createElement('a');
+            aTag.setAttribute('href', targetUrl);
+            imgEl.parentNode.insertBefore(aTag, imgEl);
+            aTag.appendChild(imgEl);
+          }
+        }
+
+        // 7. 完成したHTMLをキャッシュに保存して次回以降の通信をカット
+        localStorage.setItem('atwiki_random_window', timeWindowId);
+        localStorage.setItem('atwiki_random_html', blockquoteEl.outerHTML);
+
+        // コンテナに表示
         container.innerHTML = ""; 
         container.appendChild(blockquoteEl);
       } else {
-        console.warn("【デバッグ5-失敗】ターゲットページに blockquote が存在しません。");
-        // 何のタグで構成されているかを調べるため、ページの本文（#wikibody）のHTMLを少しだけ出力する
-        const wikibody = docTarget.querySelector('#wikibody');
-        if (wikibody) {
-          console.log("【参考】ターゲットページの本文HTML（最初の500文字）:", wikibody.innerHTML.substring(0, 500));
-        }
-        container.innerHTML = `<span style="color:red;">対象のコンテンツが見つかりませんでした。（URL: ${targetUrl}）<br>F12のConsoleを確認してください。</span>`;
+        container.innerHTML = ""; 
       }
-    } else {
-       console.warn("【デバッグ】ランダムリンクのタグ(a.atwiki_plugin_random)が見つかりません。");
     }
   } catch (e) {
-    console.error("【デバッグ】処理中に予期せぬエラーが発生しました:", e);
+    console.error("ランダム処理でエラーが発生しました:", e);
+    container.innerHTML = ""; 
   }
 });
